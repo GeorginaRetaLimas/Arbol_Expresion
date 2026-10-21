@@ -110,11 +110,20 @@ class VentanaVistaAmpliada(tk.Toplevel):
         self.ent_b.insert(0, str(self.b))
         self.ent_b.pack(side="left", padx=2)
 
-        btn_act = tk.Button(barra_sup, text="Actualizar Rango", bg=COLOR_BTN_SECUNDARIO,
+        btn_act = tk.Button(barra_sup, text="Actualizar", bg=COLOR_BTN_SECUNDARIO,
                             fg=COLOR_BTN_SECUNDARIO_TX, font=("Segoe UI", 8, "bold"),
                             relief="flat", cursor="hand2", padx=8, pady=2,
                             command=self._leer_intervalo_y_actualizar)
-        btn_act.pack(side="left", padx=8)
+        btn_act.pack(side="left", padx=4)
+
+        tk.Label(barra_sup, text="Presets:", bg=COLOR_TARJETA, fg=COLOR_SUBTITULO,
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
+        for p_txt, p_a, p_b in [("[-10, 10]", -10.0, 10.0), ("[-2, 2]", -2.0, 2.0), ("[-0.8, 0.8]", -0.8, 0.8)]:
+            tk.Button(
+                barra_sup, text=p_txt, bg=COLOR_BTN_SECUNDARIO, fg=COLOR_BTN_SECUNDARIO_TX,
+                font=("Segoe UI", 8), relief="flat", cursor="hand2", padx=5, pady=1,
+                command=lambda a=p_a, b=p_b: self._fijar_rango(a, b)
+            ).pack(side="left", padx=2)
 
         btn_fs = tk.Button(barra_sup, text="⛶ Pantalla Completa", bg=COLOR_BTN_PRIMARIO,
                            fg=BLANCO, font=("Segoe UI", 8, "bold"),
@@ -145,6 +154,15 @@ class VentanaVistaAmpliada(tk.Toplevel):
         self.toolbar.config(background=COLOR_TARJETA)
         self.toolbar.update()
 
+    def _fijar_rango(self, a, b):
+        self.a = float(a)
+        self.b = float(b)
+        self.ent_a.delete(0, "end")
+        self.ent_a.insert(0, str(self.a))
+        self.ent_b.delete(0, "end")
+        self.ent_b.insert(0, str(self.b))
+        self.actualizar_grafica()
+
     def _alternar_pantalla_completa(self):
         self.es_pantalla_completa = not self.es_pantalla_completa
         self.attributes("-fullscreen", self.es_pantalla_completa)
@@ -164,24 +182,44 @@ class VentanaVistaAmpliada(tk.Toplevel):
         self.ax.set_facecolor(BLANCO)
         modo = self.modo_vista.get()
 
-        if modo in ("csv", "ambas") and self.x_csv is not None and self.y_csv is not None:
+        x_sub, y_sub = None, None
+        if self.x_csv is not None and self.y_csv is not None:
             mascara = (self.x_csv >= self.a) & (self.x_csv <= self.b)
             if np.any(mascara):
                 x_sub = self.x_csv[mascara]
                 y_sub = self.y_csv[mascara]
                 if len(x_sub) > 2500:
-                    paso = len(x_sub) // 2000
+                    paso = max(1, len(x_sub) // 2000)
                     x_sub = x_sub[::paso]
                     y_sub = y_sub[::paso]
-                self.ax.plot(x_sub, y_sub, color=AZUL_OBJETIVO, lw=2.2, ls="--",
-                             label="Función del CSV (Objetivo)", alpha=0.9, zorder=2)
 
+        # 1. Modo CSV o Ambas: Graficar CSV
+        if modo in ("csv", "ambas") and x_sub is not None:
+            if modo == "ambas":
+                self.ax.plot(x_sub, y_sub, color="#3b82f6", lw=3.0, alpha=0.65,
+                             label="Función del CSV (Objetivo)", zorder=2)
+            else:
+                self.ax.plot(x_sub, y_sub, color="#2563eb", lw=2.4,
+                             label="Función del CSV (Objetivo)", zorder=2)
+
+        # 2. Modo Árbol o Ambas: Graficar f(x)
         if modo in ("arbol", "ambas") and self.arbol is not None:
-            x_pts = np.linspace(self.a, self.b, 1200)
+            # Evaluar sobre la MISMA rejilla exacta que el CSV para evitar desfase de aliasing
+            if modo == "ambas" and x_sub is not None:
+                x_pts = x_sub
+            else:
+                x_pts = np.linspace(self.a, self.b, 1500)
+
             with np.errstate(all="ignore"):
                 y_pts = np.asarray(self.arbol.evaluar(x_pts), dtype=float) * np.ones_like(x_pts)
             y_pts[np.abs(y_pts) > 1e6] = np.nan
-            self.ax.plot(x_pts, y_pts, color=ROSA, lw=2.6, label="Función del Árbol f(x)", zorder=3)
+
+            if modo == "ambas":
+                self.ax.plot(x_pts, y_pts, color="#e11d48", lw=1.8, ls="--",
+                             label="Función del Árbol f(x)", zorder=3)
+            else:
+                self.ax.plot(x_pts, y_pts, color="#d94a7a", lw=2.4,
+                             label="Función del Árbol f(x)", zorder=3)
 
         self.ax.axhline(0, color="#bfa2b3", lw=0.9, ls="-", zorder=1)
         self.ax.axvline(0, color="#bfa2b3", lw=0.9, ls="-", zorder=1)
@@ -309,9 +347,12 @@ class App:
         self.ga_corriendo = False
         self.ga_timer_id = None
         self.max_generaciones = 100
+        self.modo_vista_ga = tk.StringVar(value="ambas")
+        self.rango_vista_ga = tk.StringVar(value="completo")
 
         self._crear_interfaz_principal()
         self.graficar()
+        self.ga_actualizar_ui()
 
     def _cargar_datos_csv(self):
         try:
@@ -601,18 +642,79 @@ class App:
         split_frame = tk.Frame(self.tab_genetico, bg=COLOR_FONDO_APP)
         split_frame.pack(fill="both", expand=True, pady=(2, 6))
 
-        # Panel izquierdo: Gráfica en vivo
+        # Panel izquierdo: Gráfica en vivo con controles de 3 vistas fijables y zoom
         frame_plot_ga = tk.Frame(split_frame, bg=COLOR_TARJETA,
                                  highlightbackground=COLOR_BORDE_TARJETA, highlightthickness=1)
         frame_plot_ga.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
-        self.fig_ga = Figure(figsize=(7.5, 4.8), facecolor=BLANCO)
+        # Barra superior de la gráfica
+        bar_plot_ga = tk.Frame(frame_plot_ga, bg=COLOR_TARJETA, padx=8, pady=4)
+        bar_plot_ga.pack(fill="x", pady=(2, 2))
+
+        # 1. Tres vistas fijables solicitadas
+        tk.Label(bar_plot_ga, text="👁️ Vista fija:", bg=COLOR_TARJETA, fg=COLOR_TITULO,
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(2, 6))
+
+        opciones_vistas = [
+            ("🌸 Ambas empalmadas", "ambas"),
+            ("📊 Solo CSV", "csv"),
+            ("🧬 Solo Algoritmo", "algoritmo"),
+        ]
+        for texto, val in opciones_vistas:
+            rb = tk.Radiobutton(
+                bar_plot_ga, text=texto, variable=self.modo_vista_ga, value=val,
+                bg=COLOR_TARJETA, fg=COLOR_TITULO, activebackground=COLOR_TARJETA,
+                selectcolor=COLOR_TARJETA, font=("Segoe UI", 8, "bold"),
+                command=self.ga_actualizar_ui
+            )
+            rb.pack(side="left", padx=4)
+
+        sep_ga = ttk.Separator(bar_plot_ga, orient="vertical")
+        sep_ga.pack(side="left", fill="y", padx=8, pady=3)
+
+        # 2. Selector de Zoom para observar claramente las ondas
+        tk.Label(bar_plot_ga, text="🔍 Zoom:", bg=COLOR_TARJETA, fg=COLOR_SUBTITULO,
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 4))
+
+        opciones_zoom = [
+            ("🌐 [-10, 10]", "completo"),
+            ("🔎 [-2, 2]", "centro"),
+            ("🔬 [-0.8, 0.8]", "detalle"),
+        ]
+        for texto, val in opciones_zoom:
+            rb_z = tk.Radiobutton(
+                bar_plot_ga, text=texto, variable=self.rango_vista_ga, value=val,
+                bg=COLOR_TARJETA, fg=COLOR_SUBTITULO, activebackground=COLOR_TARJETA,
+                selectcolor=COLOR_TARJETA, font=("Segoe UI", 8),
+                command=self.ga_actualizar_ui
+            )
+            rb_z.pack(side="left", padx=2)
+
+        # 3. Botón para vista ampliada / pantalla completa
+        btn_ampliar = tk.Button(
+            bar_plot_ga, text="⛶ Vista Ampliada", command=self.ga_abrir_vista_ampliada,
+            bg=COLOR_BTN_SECUNDARIO, fg=COLOR_BTN_SECUNDARIO_TX,
+            activebackground="#f3d3e2", font=("Segoe UI", 8, "bold"),
+            relief="flat", cursor="hand2", padx=8, pady=2,
+            highlightbackground=COLOR_BORDE_TARJETA, highlightthickness=1
+        )
+        btn_ampliar.pack(side="right", padx=4)
+
+        # Figura y Canvas Matplotlib
+        self.fig_ga = Figure(figsize=(7.5, 4.4), facecolor=BLANCO)
         self.ax_ga = self.fig_ga.add_subplot(1, 1, 1)
         self.canvas_ga = FigureCanvasTkAgg(self.fig_ga, master=frame_plot_ga)
-        self.canvas_ga.get_tk_widget().pack(fill="both", expand=True, padx=2, pady=2)
+        self.canvas_ga.get_tk_widget().pack(fill="both", expand=True, padx=2, pady=(0, 2))
+
+        # Barra de herramientas interactiva (Lupa para zoom, mano para mover/pan, guardar)
+        f_tb_ga = tk.Frame(frame_plot_ga, bg=COLOR_TARJETA)
+        f_tb_ga.pack(fill="x", padx=4, pady=(0, 2))
+        self.toolbar_ga = NavigationToolbar2Tk(self.canvas_ga, f_tb_ga)
+        self.toolbar_ga.config(background=COLOR_TARJETA)
+        self.toolbar_ga.update()
 
         # Panel derecho: Registro de eventos y mutaciones
-        frame_log_ga = tk.Frame(split_frame, bg=COLOR_TARJETA, width=380,
+        frame_log_ga = tk.Frame(split_frame, bg=COLOR_TARJETA, width=340,
                                 highlightbackground=COLOR_BORDE_TARJETA, highlightthickness=1)
         frame_log_ga.pack(side="right", fill="both", padx=(4, 0))
         frame_log_ga.pack_propagate(False)
@@ -835,56 +937,142 @@ class App:
         self.ga_actualizar_ui()
         self.ga_timer_id = self.ventana.after(15, self.ga_iterar)
 
+    def ga_abrir_vista_ampliada(self):
+        """Abre la ventana modal de pantalla completa con el mejor árbol o la expresión objetivo."""
+        arbol = None
+        if self.ga is not None and self.ga.mejor_individuo is not None:
+            arbol = self.ga.mejor_individuo.gen
+        elif self.arbol_objetivo is not None:
+            arbol = self.arbol_objetivo
+
+        rango_tipo = self.rango_vista_ga.get()
+        if rango_tipo == "centro":
+            a, b = -2.0, 2.0
+        elif rango_tipo == "detalle":
+            a, b = -0.8, 0.8
+        else:
+            a, b = -10.0, 10.0
+
+        VentanaVistaAmpliada(self.ventana, arbol, self.x_csv, self.y_csv, a, b)
+
     def ga_actualizar_ui(self):
-        if self.ga is None or self.ga.mejor_individuo is None:
-            return
+        """
+        Actualiza métricas y redibuja la gráfica en la pestaña del Algoritmo Genético
+        respetando fielmente la vista fijada ('ambas', 'csv', 'algoritmo') y el rango de zoom.
+        """
+        ind = self.ga.mejor_individuo if (self.ga is not None and self.ga.mejor_individuo is not None) else None
 
-        ind = self.ga.mejor_individuo
-        met = ind.metricas
+        if ind is not None:
+            met = ind.metricas
+            self.lbl_ga_gen.config(text=f"Generación: {self.ga.generacion} / {self.max_generaciones}")
+            expr_corta = ind.expresion
+            if len(expr_corta) > 75:
+                expr_corta = expr_corta[:72] + "..."
+            self.lbl_ga_expr.config(text=f"Mejor: {expr_corta}")
 
-        self.lbl_ga_gen.config(text=f"Generación: {self.ga.generacion} / {self.max_generaciones}")
-        expr_corta = ind.expresion
-        if len(expr_corta) > 75:
-            expr_corta = expr_corta[:72] + "..."
-        self.lbl_ga_expr.config(text=f"Mejor: {expr_corta}")
-
-        self.ga_metricas_labels["lbl_ga_rmse"].config(text=f"{ind.adap:.6f}")
-        self.ga_metricas_labels["lbl_ga_mse"].config(text=f"{met.get('mse', 0):.6f}")
-        self.ga_metricas_labels["lbl_ga_nmse"].config(text=f"{met.get('nmse', 0):.6f}")
-        self.ga_metricas_labels["lbl_ga_r2"].config(text=f"{met.get('r2', 0):.4f}")
-        self.ga_metricas_labels["lbl_ga_y_barra"].config(text=f"{met.get('y_barra', 0):.4f}")
+            self.ga_metricas_labels["lbl_ga_rmse"].config(text=f"{ind.adap:.6f}")
+            self.ga_metricas_labels["lbl_ga_mse"].config(text=f"{met.get('mse', 0):.6f}")
+            self.ga_metricas_labels["lbl_ga_nmse"].config(text=f"{met.get('nmse', 0):.6f}")
+            self.ga_metricas_labels["lbl_ga_r2"].config(text=f"{met.get('r2', 0):.4f}")
+            self.ga_metricas_labels["lbl_ga_y_barra"].config(text=f"{met.get('y_barra', 0):.4f}")
 
         self.ax_ga.clear()
         self.ax_ga.set_facecolor(BLANCO)
 
+        modo = self.modo_vista_ga.get()
+        rango_tipo = self.rango_vista_ga.get()
+
+        if rango_tipo == "centro":
+            x_min, x_max = -2.0, 2.0
+        elif rango_tipo == "detalle":
+            x_min, x_max = -0.8, 0.8
+        else:
+            x_min, x_max = -10.0, 10.0
+
+        # Subconjunto de datos CSV en el intervalo seleccionado
+        x_sub, y_sub = None, None
         if self.x_csv is not None and self.y_csv is not None:
-            paso = max(1, len(self.x_csv) // 800)
-            self.ax_ga.plot(self.x_csv[::paso], self.y_csv[::paso], color=AZUL_OBJETIVO,
-                            lw=2.0, ls="--", label="Objetivo y (CSV)", alpha=0.85)
+            mascara = (self.x_csv >= x_min) & (self.x_csv <= x_max)
+            if np.any(mascara):
+                x_sub = self.x_csv[mascara]
+                y_sub = self.y_csv[mascara]
+                # Para rango completo, submuestrear ordenadamente para mantener fluidez
+                if len(x_sub) > 2000:
+                    paso = max(1, len(x_sub) // 1200)
+                    x_sub = x_sub[::paso]
+                    y_sub = y_sub[::paso]
 
-        if ind.gen is not None:
-            x_plot = np.linspace(-10, 10, 800)
-            with np.errstate(all="ignore"):
-                y_pred = np.asarray(ind.gen.evaluar(x_plot), dtype=float) * np.ones_like(x_plot)
-            y_pred[np.abs(y_pred) > 1e5] = np.nan
-            self.ax_ga.plot(x_plot, y_pred, color=ROSA, lw=2.4,
-                            label=f"Mejor f(x) (Gen {self.ga.generacion})")
+        # 1. Graficar CSV si el modo lo incluye
+        if modo in ("csv", "ambas") and x_sub is not None:
+            if modo == "ambas":
+                # En modo empalmado: curva base azul suave y continua
+                self.ax_ga.plot(x_sub, y_sub, color="#3b82f6", lw=2.8, alpha=0.65,
+                                label="CSV Objetivo (y)", zorder=2)
+            else:
+                self.ax_ga.plot(x_sub, y_sub, color="#2563eb", lw=2.2,
+                                label="Solo CSV Objetivo (y)", zorder=2)
 
-        self.ax_ga.axhline(0, color="#bfa2b3", lw=0.8, ls="-")
-        self.ax_ga.axvline(0, color="#bfa2b3", lw=0.8, ls="-")
-        self.ax_ga.grid(True, color=GRIS_REJILLA, linestyle=":", lw=1.1)
+        # 2. Graficar Algoritmo si el modo lo incluye
+        if modo in ("algoritmo", "ambas"):
+            if ind is not None and ind.gen is not None:
+                # CLAVE: En modo empalmado se evalúa en la MISMA rejilla exacta que el CSV
+                # para eliminar 100% cualquier desfase artificial por muestreo desalineado
+                if modo == "ambas" and x_sub is not None:
+                    x_eval = x_sub
+                else:
+                    x_eval = np.linspace(x_min, x_max, 1200)
+
+                with np.errstate(all="ignore"):
+                    y_pred = np.asarray(ind.gen.evaluar(x_eval), dtype=float) * np.ones_like(x_eval)
+                y_pred[np.abs(y_pred) > 1e6] = np.nan
+
+                if modo == "ambas":
+                    # En modo empalmado: línea discontinua carmín/rosa nítida montada encima
+                    self.ax_ga.plot(x_eval, y_pred, color="#e11d48", lw=1.6, ls="--",
+                                    label=f"Algoritmo f(x) (Gen {self.ga.generacion})", zorder=3)
+                else:
+                    self.ax_ga.plot(x_eval, y_pred, color="#d94a7a", lw=2.2,
+                                    label=f"Solo Algoritmo f(x) (Gen {self.ga.generacion})", zorder=2)
+            elif modo == "algoritmo":
+                self.ax_ga.text(
+                    0.5, 0.5,
+                    "Inicia la evolución para generar y visualizar\nla función f(x) del algoritmo genético",
+                    transform=self.ax_ga.transAxes, ha="center", va="center",
+                    color=TEXTO_MUTED, fontsize=10, fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.8", facecolor="#fdf2f6", edgecolor="#ebd0df")
+                )
+
+        # Ejes y rejilla estética
+        self.ax_ga.axhline(0, color="#bfa2b3", lw=0.8, ls="-", zorder=1)
+        self.ax_ga.axvline(0, color="#bfa2b3", lw=0.8, ls="-", zorder=1)
+        self.ax_ga.grid(True, color=GRIS_REJILLA, linestyle=":", lw=1.0, zorder=0)
 
         for spine in self.ax_ga.spines.values():
             spine.set_color("#e3c9d6")
 
         self.ax_ga.tick_params(colors=TEXTO_MUTED, labelsize=9)
-        self.ax_ga.set_title(
-            f"Sincronización con CSV (Gen {self.ga.generacion}) • RMSE: {ind.adap:.4f} • R²: {met.get('r2', 0):.4f}",
-            color=NEGRO, fontsize=11, fontweight="bold", pad=8
-        )
+        self.ax_ga.set_xlim(x_min, x_max)
+
+        tit_modo = "Ambas Empalmadas" if modo == "ambas" else ("Solo CSV Objetivo" if modo == "csv" else "Solo Algoritmo f(x)")
+        if ind is not None:
+            self.ax_ga.set_title(
+                f"[{tit_modo}] Gen {self.ga.generacion} • RMSE: {ind.adap:.4f} • R²: {met.get('r2', 0):.4f} • Rango [{x_min}, {x_max}]",
+                color=NEGRO, fontsize=10, fontweight="bold", pad=8
+            )
+        else:
+            pts_txt = f"{len(self.x_csv):,} pts" if self.x_csv is not None else "Sin CSV"
+            self.ax_ga.set_title(
+                f"[{tit_modo}] Dataset ({pts_txt}) • Rango [{x_min}, {x_max}] • Listo",
+                color=NEGRO, fontsize=10, fontweight="bold", pad=8
+            )
+
         self.ax_ga.set_xlabel("x", color=NEGRO, fontsize=9, fontweight="bold")
         self.ax_ga.set_ylabel("y", color=NEGRO, fontsize=9, fontweight="bold")
-        self.ax_ga.legend(frameon=True, facecolor=BLANCO, edgecolor=ROSA_BORDE, fontsize=8, loc="best")
+
+        handles, labels = self.ax_ga.get_legend_handles_labels()
+        if handles:
+            self.ax_ga.legend(handles, labels, frameon=True, facecolor=BLANCO, edgecolor=ROSA_BORDE,
+                              fontsize=8, loc="upper right")
 
         self.fig_ga.tight_layout()
         self.canvas_ga.draw()

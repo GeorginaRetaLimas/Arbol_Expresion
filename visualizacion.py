@@ -205,6 +205,7 @@ def dibujar_funcion(ax, arbol, a, b, datos_ref=None):
     ax.set_facecolor(BLANCO)
 
     # 1. Grafica de referencia CSV (si existe)
+    xr_plot = None
     if datos_ref is not None:
         x_ref, y_ref = datos_ref
         dentro = (x_ref >= a) & (x_ref <= b)
@@ -212,20 +213,27 @@ def dibujar_funcion(ax, arbol, a, b, datos_ref=None):
             xr_plot = x_ref[dentro]
             yr_plot = y_ref[dentro]
             if len(xr_plot) > 1500:
-                paso_muestreo = len(xr_plot) // 1200
+                paso_muestreo = max(1, len(xr_plot) // 1200)
                 xr_plot = xr_plot[::paso_muestreo]
                 yr_plot = yr_plot[::paso_muestreo]
-            ax.plot(xr_plot, yr_plot, color=AZUL_OBJETIVO, lw=2.0, ls="--",
-                    label="y Objetivo (CSV)", alpha=0.9, zorder=2)
+            ax.plot(xr_plot, yr_plot, color="#3b82f6", lw=2.8, alpha=0.65,
+                    label="y Objetivo (CSV)", zorder=2)
 
-    # 2. Grafica de f(x) del arbol
-    x = np.linspace(a, b, 750)
+    # 2. Grafica de f(x) del arbol (usando la misma rejilla exacta si hay CSV)
+    if xr_plot is not None:
+        x = xr_plot
+    else:
+        x = np.linspace(a, b, 1000)
+
     with np.errstate(all="ignore"):
         y = np.asarray(arbol.evaluar(x), dtype=float) * np.ones_like(x)
     y[np.abs(y) > 1e6] = np.nan
 
     etiqueta = "f(x) Árbol" if datos_ref is not None else "f(x)"
-    ax.plot(x, y, color=ROSA, lw=2.4, label=etiqueta, zorder=3)
+    ls = "--" if datos_ref is not None else "-"
+    lw = 1.8 if datos_ref is not None else 2.4
+    color_arbol = "#e11d48" if datos_ref is not None else ROSA
+    ax.plot(x, y, color=color_arbol, lw=lw, ls=ls, label=etiqueta, zorder=3)
 
     # Ejes coordenados y rejilla
     ax.axhline(0, color="#bfa2b3", lw=0.9, ls="-", zorder=1)
