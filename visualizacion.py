@@ -6,8 +6,12 @@ No usan tkinter: reciben un "ax" de matplotlib, asi se pueden usar en
 cualquier interfaz, notebook o script.
 
 Paleta rosita bonita, suave y digerible (no chillona).
-Diseno de arbol verdaderamente binario (hijo izquierdo a la izq, derecho a la der,
-padre centrado, funciones unarias alineadas verticalmente).
+Diseno de arbol binario puro:
+- El nodo raiz se ubica estrictamente ARRIBA Y EN EL CENTRO.
+- Los hijos descienden claramente hacia abajo.
+- Los operadores binarios tienen hijo izquierdo a la izquierda, hijo derecho a la derecha,
+  y el padre centrado.
+- Las funciones unarias tienen su hijo alineado verticalmente hacia abajo.
 """
 import numpy as np
 
@@ -19,44 +23,35 @@ ROSA_BORDE = "#c97a9b"      # Borde sutil para nodos
 ROSA_LINEA = "#8a667b"      # Tono ciruela / malva para ramas del arbol
 BLANCO = "#ffffff"          # Blanco puro para fondos y contraste
 FONDO_SUAVE = "#fdf8fb"     # Fondo suave aperlado
-NEGRO = "#2d1b28"           # Texto oscuro ciruela/espresso (mucho mas suave que #111111)
+NEGRO = "#2d1b28"           # Texto oscuro ciruela/espresso
 TEXTO_MUTED = "#7a596e"     # Texto secundario
 AZUL_OBJETIVO = "#486581"   # Azul pizarra / lavanda oscuro para contrastar con f(x) objetivo
 GRIS_REJILLA = "#f2e4ec"    # Rejilla suave en tono rosaceo
 
 
-def posiciones(raiz, nivel=0, min_sep=1.0):
+def posiciones(raiz, min_sep=1.35, dy=1.35):
     """
     Calcula coordenadas (x, y) de cada nodo para que el arbol SI PAREZCA BINARIO:
-    - El hijo izquierdo siempre queda a la izquierda del padre.
-    - El hijo derecho siempre queda a la derecha del padre.
-    - Los operadores binarios se centran exactamente sobre sus dos hijos: x = (x_izq + x_der)/2.
-    - Las funciones unarias (1 solo argumento en izq) se alinean verticalmente: x = x_izq.
-    - Los subarboles respetan contornos para que ninguna rama ni nodo se solape.
-    Retorna un diccionario {nodo: (x, y)}.
+    - La raiz esta estrictamente ARRIBA Y EN EL CENTRO (x=0, y=0).
+    - Los niveles descienden claramente con espaciado vertical constante (-prof * dy).
+    - Hijo izquierdo estrictamente a la izquierda, hijo derecho a la derecha.
+    - Operadores binarios centrados entre sus dos hijos.
+    - Funciones unarias con su argumento directamente abajo.
     """
     if raiz is None:
         return {}
 
-    class NodoAux:
-        def __init__(self, nodo, prof=0):
-            self.nodo = nodo
+    class Aux:
+        def __init__(self, n, prof=0):
+            self.node = n
             self.prof = prof
             self.x = 0.0
-            self.izq = NodoAux(nodo.izq, prof + 1) if nodo.izq else None
-            self.der = NodoAux(nodo.der, prof + 1) if nodo.der else None
+            self.izq = Aux(n.izq, prof + 1) if n.izq else None
+            self.der = Aux(n.der, prof + 1) if n.der else None
 
-    root = NodoAux(raiz, nivel)
-
-    def desplazar(aux, dx):
-        if not aux:
-            return
-        aux.x += dx
-        desplazar(aux.izq, dx)
-        desplazar(aux.der, dx)
+    root = Aux(raiz, 0)
 
     def contorno(aux):
-        # Devuelve lista de tuplas (min_x, max_x) por nivel
         res = [(aux.x, aux.x)]
         c_izq = contorno(aux.izq) if aux.izq else []
         c_der = contorno(aux.der) if aux.der else []
@@ -69,24 +64,28 @@ def posiciones(raiz, nivel=0, min_sep=1.0):
                 res.append(c_der[i])
         return res
 
+    def desplazar(aux, dx):
+        if not aux:
+            return
+        aux.x += dx
+        desplazar(aux.izq, dx)
+        desplazar(aux.der, dx)
+
     def pos_rec(aux):
         if not aux.izq and not aux.der:
             aux.x = 0.0
             return
 
-        # Unario: funcion con un solo argumento (en izq)
         if aux.izq and not aux.der:
             pos_rec(aux.izq)
             aux.x = aux.izq.x
             return
 
-        # En caso de solo der (por simetria)
         if not aux.izq and aux.der:
             pos_rec(aux.der)
             aux.x = aux.der.x
             return
 
-        # Binario: tiene hijo izquierdo y derecho
         pos_rec(aux.izq)
         pos_rec(aux.der)
 
@@ -104,43 +103,39 @@ def posiciones(raiz, nivel=0, min_sep=1.0):
 
     pos_rec(root)
 
-    # Convertir a coordenadas finales y normalizar horizontalmente centrado en 0
+    # Centrar estrictamente en la raiz (raiz en x=0, y=0 arriba)
+    dx_raiz = -root.x
+    desplazar(root, dx_raiz)
+
     pos = {}
     def recolectar(aux):
-        pos[aux.nodo] = (aux.x, -float(aux.prof))
+        pos[aux.node] = (aux.x, -float(aux.prof) * dy)
         if aux.izq:
             recolectar(aux.izq)
         if aux.der:
             recolectar(aux.der)
 
     recolectar(root)
-
-    # Centrar horizontalmente respecto al punto medio
-    if pos:
-        xs = [coord[0] for coord in pos.values()]
-        x_centro = (min(xs) + max(xs)) / 2.0
-        pos = {nodo: (x - x_centro, y) for nodo, (x, y) in pos.items()}
-
     return pos
 
 
-def dibujar_arbol(ax, arbol):
+def dibujar_arbol(ax, arbol, titulo="Estructura del Árbol Binario"):
     """
-    Dibuja el arbol de expresion con estructura binaria pura,
-    con nodos circulares/pildoras estilizados y paleta rosa bonita.
+    Dibuja el arbol de expresion con el nodo raiz estrictamente arriba y centrado,
+    hijos hacia abajo de forma jerarquica y paleta rosita bonita.
     """
     ax.clear()
     ax.set_facecolor(BLANCO)
 
     if arbol is None or arbol.raiz is None:
-        ax.text(0.5, 0.5, "Sin arbol", ha="center", va="center", color=TEXTO_MUTED)
+        ax.text(0.5, 0.5, "Sin árbol", ha="center", va="center", color=TEXTO_MUTED)
         ax.axis("off")
         return
 
     pos = posiciones(arbol.raiz)
     n = len(pos)
 
-    # Tamano de fuente y proporciones dinamicas segun cantidad de nodos
+    # Tamano de fuente y proporciones segun cantidad de nodos
     if n <= 10:
         tamano = 10
         lw_linea = 1.8
@@ -168,37 +163,35 @@ def dibujar_arbol(ax, arbol):
         texto = str(nodo.valor)
 
         if es_binario:
-            # Operador binario: circulo rosa principal
             fc = ROSA
             tc = BLANCO
-            b_style = "circle,pad=0.32" if len(texto) <= 2 else "round,pad=0.35,rounding_size=0.4"
-            box = dict(boxstyle=b_style, fc=fc, ec=ROSA_BORDE, lw=1.3)
+            b_style = "circle,pad=0.35" if len(texto) <= 2 else "round,pad=0.38,rounding_size=0.4"
+            box = dict(boxstyle=b_style, fc=fc, ec=ROSA_BORDE, lw=1.4)
         elif es_unario:
-            # Funcion unaria: capsula redondeada rosa frambuesa
             fc = ROSA_MEDIO
             tc = BLANCO
-            box = dict(boxstyle="round,pad=0.35,rounding_size=0.45", fc=fc, ec=ROSA_BORDE, lw=1.3)
+            box = dict(boxstyle="round,pad=0.38,rounding_size=0.45", fc=fc, ec=ROSA_BORDE, lw=1.4)
         else:
-            # Operando / hoja (x o numero): circulo o capsula clara
             fc = ROSA_CLARO
             tc = NEGRO
-            b_style = "circle,pad=0.30" if len(texto) <= 2 else "round,pad=0.32,rounding_size=0.4"
-            box = dict(boxstyle=b_style, fc=fc, ec=ROSA_BORDE, lw=1.1)
+            b_style = "circle,pad=0.32" if len(texto) <= 2 else "round,pad=0.35,rounding_size=0.4"
+            box = dict(boxstyle=b_style, fc=fc, ec=ROSA_BORDE, lw=1.2)
 
         ax.text(x, y, texto, ha="center", va="center", fontsize=tamano,
                 fontweight="bold", color=tc, bbox=box, zorder=2)
 
-    # Ajustar limites con un margen comodo
+    # Ajustar limites asegurando que la raiz este centrada y visible
     xs = [coord[0] for coord in pos.values()]
     ys = [coord[1] for coord in pos.values()]
-    ancho = max(xs) - min(xs) if len(xs) > 1 else 1.0
-    alto = max(ys) - min(ys) if len(ys) > 1 else 1.0
-    pad_x = max(0.8, ancho * 0.12)
-    pad_y = max(0.8, alto * 0.15)
+    ancho = max(xs) - min(xs) if len(xs) > 1 else 2.0
+    alto = max(ys) - min(ys) if len(ys) > 1 else 2.0
+
+    pad_x = max(1.0, ancho * 0.15)
+    pad_y = max(1.0, alto * 0.15)
     ax.set_xlim(min(xs) - pad_x, max(xs) + pad_x)
     ax.set_ylim(min(ys) - pad_y, max(ys) + pad_y)
 
-    ax.set_title("Estructura del Arbol Binario", color=NEGRO, fontsize=12, fontweight="bold", pad=12)
+    ax.set_title(titulo, color=NEGRO, fontsize=12, fontweight="bold", pad=12)
     ax.axis("off")
 
 
@@ -206,29 +199,27 @@ def dibujar_funcion(ax, arbol, a, b, datos_ref=None):
     """
     Grafica la funcion del arbol f(x) en el intervalo [a, b].
     Si se proporciona datos_ref=(x_ref, y_ref), tambien dibuja los puntos/curva
-    de referencia (ej. del CSV o funcion objetivo) con leyenda.
+    de referencia del CSV con leyenda.
     """
     ax.clear()
     ax.set_facecolor(BLANCO)
 
-    # 1. Grafica de referencia (si existe)
+    # 1. Grafica de referencia CSV (si existe)
     if datos_ref is not None:
         x_ref, y_ref = datos_ref
-        # Si x_ref esta dentro del intervalo solicitado, filtramos
         dentro = (x_ref >= a) & (x_ref <= b)
         if np.any(dentro):
             xr_plot = x_ref[dentro]
             yr_plot = y_ref[dentro]
-            # Si hay demasiados puntos (>1200), submuestreamos suavemente para no saturar matplotlib
-            if len(xr_plot) > 1200:
-                paso_muestreo = len(xr_plot) // 1000
+            if len(xr_plot) > 1500:
+                paso_muestreo = len(xr_plot) // 1200
                 xr_plot = xr_plot[::paso_muestreo]
                 yr_plot = yr_plot[::paso_muestreo]
             ax.plot(xr_plot, yr_plot, color=AZUL_OBJETIVO, lw=2.0, ls="--",
                     label="y Objetivo (CSV)", alpha=0.9, zorder=2)
 
     # 2. Grafica de f(x) del arbol
-    x = np.linspace(a, b, 700)
+    x = np.linspace(a, b, 750)
     with np.errstate(all="ignore"):
         y = np.asarray(arbol.evaluar(x), dtype=float) * np.ones_like(x)
     y[np.abs(y) > 1e6] = np.nan
@@ -241,7 +232,6 @@ def dibujar_funcion(ax, arbol, a, b, datos_ref=None):
     ax.axvline(0, color="#bfa2b3", lw=0.9, ls="-", zorder=1)
     ax.grid(True, color=GRIS_REJILLA, linestyle=":", lw=1.1, zorder=0)
 
-    # Estilos de borde y etiquetas
     for spine in ax.spines.values():
         spine.set_color("#e3c9d6")
         spine.set_linewidth(1.0)

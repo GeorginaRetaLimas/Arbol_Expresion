@@ -77,6 +77,10 @@ def calcular_metricas(y_real, y_pred):
     """
     y = np.asarray(y_real, dtype=float)
     y_hat = np.asarray(y_pred, dtype=float)
+    if y_hat.ndim == 0:
+        y_hat = y_hat * np.ones_like(y)
+    elif y_hat.shape != y.shape:
+        y_hat = np.resize(y_hat, y.shape)
 
     # Filtrar pares donde ambos sean finitos (ignora infinitos o indeterminaciones)
     mascara = np.isfinite(y) & np.isfinite(y_hat)
